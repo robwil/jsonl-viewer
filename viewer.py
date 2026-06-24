@@ -155,6 +155,7 @@ CP_CURSOR_MARKER = 9
 CP_TITLE_BAR = 10
 CP_PROGRESS_FILL = 11
 CP_META = 12
+CP_SEARCH_MATCH = 13
 
 
 def init_colors():
@@ -172,6 +173,7 @@ def init_colors():
     curses.init_pair(CP_TITLE_BAR, curses.COLOR_WHITE, curses.COLOR_BLACK)
     curses.init_pair(CP_PROGRESS_FILL, curses.COLOR_BLACK, curses.COLOR_CYAN)
     curses.init_pair(CP_META, curses.COLOR_WHITE, -1)
+    curses.init_pair(CP_SEARCH_MATCH, curses.COLOR_RED, -1)
 
 
 @dataclass
@@ -319,8 +321,33 @@ def _is_header_visible(cursor_msg: int, scroll_pos: int, viewable: int,
     return False
 
 
+def _draw_with_highlights(stdscr, row: int, col: int, text: str,
+                          max_w: int, normal_attr: int, highlight_attr: int,
+                          query: str):
+    """Draw text with case-insensitive search matches highlighted."""
+    text = text[:max_w]
+    lower_text = text.lower()
+    lower_query = query.lower()
+    qlen = len(lower_query)
+    pos = 0
+    x = col
+    while pos < len(text):
+        match_pos = lower_text.find(lower_query, pos)
+        if match_pos == -1:
+            stdscr.addnstr(row, x, text[pos:], max_w - (x - col), normal_attr)
+            break
+        if match_pos > pos:
+            chunk = text[pos:match_pos]
+            stdscr.addnstr(row, x, chunk, max_w - (x - col), normal_attr)
+            x += len(chunk)
+        matched = text[match_pos:match_pos + qlen]
+        stdscr.addnstr(row, x, matched, max_w - (x - col), highlight_attr)
+        x += len(matched)
+        pos = match_pos + qlen
+
+
 def draw_help_bar(stdscr, height, width):
-    bar = " ↑↓:scroll  n/N:msg  ←→:swipe  r:reasoning  g:goto  q:quit  ?:help"
+    bar = " ↑↓:scroll  n/N:msg  ←→:swipe  r:reasoning  /:search  g:goto  q:quit  ?:help"
     bar = bar[:width].ljust(width)
     try:
         stdscr.addnstr(height - 1, 0, bar, width, curses.color_pair(CP_HELP_BAR))
@@ -344,6 +371,9 @@ HELP_LINES = [
     "  → / l           Next swipe",
     "",
     "  r               Toggle reasoning",
+    "",
+    "  /               Search message text",
+    "                  n/N to navigate results",
     "",
     "  q / Esc         Quit",
     "  ?               This help",
@@ -443,6 +473,64 @@ def _goto_dialog(stdscr, height: int, width: int, total_msgs: int) -> int | None
             input_buf += chr(k)
 
 
+def _search_dialog(stdscr, height: int, width: int) -> str | None:
+    """Show a search input dialog, return query or None if cancelled."""
+    prompt = "Search: "
+    box_w = min(60, width - 4)
+    box_h = 5
+    start_y = (height - box_h) // 2
+    start_x = (width - box_w) // 2
+    input_buf = ""
+
+    while True:
+        for row in range(box_h):
+            y = start_y + row
+            if row == 0:
+                line = "┌" + "─" * (box_w - 2) + "┐"
+            elif row == box_h - 1:
+                line = "└" + "─" * (box_w - 2) + "┘"
+            elif row == 2:
+                inner = f"{prompt}{input_buf}"
+                inner = inner[:box_w - 4]
+                line = "│ " + inner.ljust(box_w - 4) + " │"
+            else:
+                line = "│" + " " * (box_w - 2) + "│"
+            try:
+                stdscr.addnstr(y, start_x, line, box_w,
+                               curses.color_pair(CP_HELP_BAR) | curses.A_BOLD)
+            except curses.error:
+                pass
+
+        cursor_x = start_x + 2 + len(prompt) + len(input_buf)
+        if cursor_x < start_x + box_w - 2:
+            try:
+                curses.curs_set(1)
+                stdscr.move(start_y + 2, cursor_x)
+            except curses.error:
+                pass
+
+        stdscr.refresh()
+        k = stdscr.getch()
+
+        if k == 27:
+            curses.curs_set(0)
+            return None
+        elif k in (ord("\n"), curses.KEY_ENTER):
+            curses.curs_set(0)
+            return input_buf if input_buf else None
+        elif k in (curses.KEY_BACKSPACE, 127, 8):
+            input_buf = input_buf[:-1]
+        elif 32 <= k <= 126:
+            input_buf += chr(k)
+
+
+def _find_search_matches(messages: list[Message], query: str) -> list[int]:
+    """Return 0-based message indices whose active swipe body matches query (case-insensitive)."""
+    q = query.lower()
+    return [i for i, m in enumerate(messages)
+            if q in m.swipes[m.active_swipe].text.lower()]
+
+
 def main(stdscr, chat: Chat):
     curses.curs_set(0)
     init_colors()
@@ -460,6 +548,13 @@ def main(stdscr, chat: Chat):
     needs_rerender = True
     needs_clear = True
     scroll_to_cursor = False
+    scroll_to_search: str | None = None  # if set, scroll to first line matching this query
+
+    # Search state
+    search_mode = False
+    search_query = ""
+    search_matches: list[int] = []
+    search_idx = 0
 
     while True:
         height, width = stdscr.getmaxyx()
@@ -480,8 +575,13 @@ def main(stdscr, chat: Chat):
         max_scroll = max(0, total - viewable)
 
         if scroll_to_cursor:
-            scroll_pos = _scroll_to_msg(cursor_msg, rendered, line_to_msg,
-                                        scroll_pos, viewable, max_scroll)
+            if scroll_to_search:
+                scroll_pos = _scroll_to_match(cursor_msg, scroll_to_search,
+                                              rendered, line_to_msg, viewable, max_scroll)
+                scroll_to_search = None
+            else:
+                scroll_pos = _scroll_to_msg(cursor_msg, rendered, line_to_msg,
+                                            scroll_pos, viewable, max_scroll)
             scroll_to_cursor = False
             # Recheck sticky after scroll adjustment
             show_sticky = not _is_header_visible(cursor_msg, scroll_pos,
@@ -507,6 +607,7 @@ def main(stdscr, chat: Chat):
 
         # Content area
         content_start_row = header_rows
+        highlight_attr = curses.color_pair(CP_SEARCH_MATCH) | curses.A_BOLD
         for i in range(viewable):
             line_idx = scroll_pos + i
             if line_idx >= total:
@@ -518,19 +619,78 @@ def main(stdscr, chat: Chat):
             text = rl.text
             screen_row = content_start_row + i
             try:
+                # Draw gutter marker
+                col = 0
                 if text.startswith("▌"):
                     stdscr.addstr(screen_row, 0, "▌",
                                   curses.color_pair(CP_CURSOR_MARKER) | curses.A_BOLD)
-                    stdscr.addnstr(screen_row, 1, text[1:width], width - 1, attr)
+                    col = 1
+                    text = text[1:]
+
+                if search_mode and search_query and not rl.is_header:
+                    _draw_with_highlights(stdscr, screen_row, col, text,
+                                          width - col, attr, highlight_attr,
+                                          search_query)
                 else:
-                    stdscr.addnstr(screen_row, 0, text[:width], width, attr)
+                    stdscr.addnstr(screen_row, col, text[:width - col],
+                                   width - col, attr)
             except curses.error:
                 pass
 
-        draw_help_bar(stdscr, height, width)
+        if search_mode:
+            match_pos = search_matches.index(cursor_msg) + 1 if cursor_msg in search_matches else 0
+            sbar = f" SEARCH \"{search_query}\"  {match_pos}/{len(search_matches)}  n/N:next/prev  Esc:exit"
+            sbar = sbar[:width].ljust(width)
+            try:
+                stdscr.addnstr(height - 1, 0, sbar, width,
+                               curses.color_pair(CP_SWIPE_INDICATOR) | curses.A_BOLD)
+            except curses.error:
+                pass
+        else:
+            draw_help_bar(stdscr, height, width)
         stdscr.refresh()
 
         key = stdscr.getch()
+
+        if search_mode:
+            if key == 27:
+                search_mode = False
+            elif key == ord("n") and search_matches:
+                search_idx = (search_idx + 1) % len(search_matches)
+                cursor_msg = search_matches[search_idx]
+                needs_rerender = True
+                scroll_to_cursor = True
+                scroll_to_search = search_query
+            elif key in (ord("N"), ord("p")) and search_matches:
+                search_idx = (search_idx - 1) % len(search_matches)
+                cursor_msg = search_matches[search_idx]
+                needs_rerender = True
+                scroll_to_cursor = True
+                scroll_to_search = search_query
+            elif key == ord("/"):
+                query = _search_dialog(stdscr, height, width)
+                needs_clear = True
+                if query:
+                    search_query = query
+                    search_matches = _find_search_matches(messages, search_query)
+                    search_idx = 0
+                    if search_matches:
+                        cursor_msg = search_matches[0]
+                        needs_rerender = True
+                        scroll_to_cursor = True
+                        scroll_to_search = search_query
+            elif key in (curses.KEY_DOWN, ord("j")):
+                scroll_pos = min(scroll_pos + 1, max_scroll)
+            elif key in (curses.KEY_UP, ord("k")):
+                scroll_pos = max(scroll_pos - 1, 0)
+            elif key in (curses.KEY_NPAGE, ord(" ")):
+                scroll_pos = min(scroll_pos + viewable, max_scroll)
+            elif key == curses.KEY_PPAGE:
+                scroll_pos = max(scroll_pos - viewable, 0)
+            elif key == ord("q"):
+                break
+            continue
+
         if key == ord("q") or key == 27:
             break
         elif key in (curses.KEY_DOWN, ord("j"), curses.KEY_UP, ord("k"),
@@ -583,6 +743,19 @@ def main(stdscr, chat: Chat):
         elif key == ord("?"):
             _draw_help_overlay(stdscr, height, width)
             needs_clear = True
+        elif key == ord("/"):
+            query = _search_dialog(stdscr, height, width)
+            needs_clear = True
+            if query:
+                search_query = query
+                search_matches = _find_search_matches(messages, search_query)
+                search_idx = 0
+                search_mode = True
+                if search_matches:
+                    cursor_msg = search_matches[0]
+                    needs_rerender = True
+                    scroll_to_cursor = True
+                    scroll_to_search = search_query
         elif key == curses.KEY_MOUSE:
             try:
                 _, mx, my, _, bstate = curses.getmouse()
@@ -648,6 +821,21 @@ def _scroll_to_msg(msg_idx: int, rendered: list[RenderedLine],
         if mid == msg_idx:
             return max(0, min(i - 1, max_scroll))
     return scroll_pos
+
+
+def _scroll_to_match(msg_idx: int, query: str, rendered: list[RenderedLine],
+                     line_to_msg: list[int], viewable: int, max_scroll: int) -> int:
+    """Scroll so the first line in msg_idx containing query is visible."""
+    q = query.lower()
+    for i, rl in enumerate(rendered):
+        if rl.msg_idx == msg_idx and not rl.is_header and q in rl.text.lower():
+            target = max(0, i - viewable // 3)
+            return max(0, min(target, max_scroll))
+    # Fallback: scroll to message start
+    for i, mid in enumerate(line_to_msg):
+        if mid == msg_idx:
+            return max(0, min(i - 1, max_scroll))
+    return 0
 
 
 if __name__ == "__main__":
