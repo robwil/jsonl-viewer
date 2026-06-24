@@ -184,10 +184,11 @@ class RenderedLine:
     is_header: bool = False
 
 
-def _build_header_text(msg: Message, prefix: str) -> str:
-    """Build the header line text for a message."""
+def _build_header_text(msg: Message, prefix: str, msg_id: int = 0) -> str:
+    """Build the header line text for a message. msg_id is 1-based."""
     swipe = msg.swipes[msg.active_swipe] if msg.swipes else Swipe("", "")
-    parts = [f"{prefix}{msg.name}"]
+    id_str = f"#{msg_id} " if msg_id else ""
+    parts = [f"{prefix}{id_str}{msg.name}"]
 
     if len(msg.swipes) > 1:
         parts.append(f"[{msg.active_swipe + 1}/{len(msg.swipes)}]")
@@ -232,7 +233,7 @@ def render_messages(messages: list[Message], width: int, expanded_reasoning: set
             lines.append(RenderedLine("─" * width, CP_SEPARATOR, msg_idx=idx))
 
         name_cp = _name_color(msg)
-        header = _build_header_text(msg, prefix)
+        header = _build_header_text(msg, prefix, msg_id=idx + 1)
         lines.append(RenderedLine(header, name_cp, bold=True, msg_idx=idx, is_header=True))
 
         swipe = msg.swipes[msg.active_swipe] if msg.swipes else Swipe("", "")
@@ -293,9 +294,9 @@ def _draw_title_bar(stdscr, row: int, width: int, chat: Chat,
         pass
 
 
-def _draw_sticky_header(stdscr, row: int, width: int, msg: Message):
+def _draw_sticky_header(stdscr, row: int, width: int, msg: Message, msg_id: int):
     """Draw the sticky current-message header."""
-    header_text = _build_header_text(msg, "▌ ")
+    header_text = _build_header_text(msg, "▌ ", msg_id=msg_id)
     name_cp = _name_color(msg)
     try:
         stdscr.addstr(row, 0, "▌", curses.color_pair(CP_CURSOR_MARKER) | curses.A_BOLD)
@@ -319,7 +320,7 @@ def _is_header_visible(cursor_msg: int, scroll_pos: int, viewable: int,
 
 
 def draw_help_bar(stdscr, height, width):
-    bar = " ↑↓:scroll  n/N:msg  ←→:swipe  r:reasoning  g/G:top/end  q:quit  ?:help"
+    bar = " ↑↓:scroll  n/N:msg  ←→:swipe  r:reasoning  g:goto  q:quit  ?:help"
     bar = bar[:width].ljust(width)
     try:
         stdscr.addnstr(height - 1, 0, bar, width, curses.color_pair(CP_HELP_BAR))
@@ -334,8 +335,7 @@ HELP_LINES = [
     "  ↓ / j          Scroll down one line",
     "  PgUp            Scroll up one page",
     "  PgDn / Space    Scroll down one page",
-    "  g               Jump to first message",
-    "  G               Jump to last message",
+    "  g / G           Go to message by ID",
     "",
     "  n               Next message",
     "  N / p           Previous message",
@@ -383,6 +383,64 @@ def _draw_help_overlay(stdscr, height, width):
         k = stdscr.getch()
         if k in (ord("?"), ord("q"), 27, ord("\n")):
             break
+
+
+def _goto_dialog(stdscr, height: int, width: int, total_msgs: int) -> int | None:
+    """Show a goto dialog, return 0-based message index or None if cancelled."""
+    prompt = f"Go to message (1-{total_msgs}): "
+    box_w = min(len(prompt) + 12, width - 4)
+    box_h = 5
+    start_y = (height - box_h) // 2
+    start_x = (width - box_w) // 2
+    input_buf = ""
+
+    while True:
+        for row in range(box_h):
+            y = start_y + row
+            if row == 0:
+                line = "┌" + "─" * (box_w - 2) + "┐"
+            elif row == box_h - 1:
+                line = "└" + "─" * (box_w - 2) + "┘"
+            elif row == 2:
+                inner = f"{prompt}{input_buf}"
+                inner = inner[:box_w - 4]
+                line = "│ " + inner.ljust(box_w - 4) + " │"
+            else:
+                line = "│" + " " * (box_w - 2) + "│"
+            try:
+                stdscr.addnstr(y, start_x, line, box_w,
+                               curses.color_pair(CP_HELP_BAR) | curses.A_BOLD)
+            except curses.error:
+                pass
+
+        # Show cursor at input position
+        cursor_x = start_x + 2 + len(prompt) + len(input_buf)
+        if cursor_x < start_x + box_w - 2:
+            try:
+                curses.curs_set(1)
+                stdscr.move(start_y + 2, cursor_x)
+            except curses.error:
+                pass
+
+        stdscr.refresh()
+        k = stdscr.getch()
+
+        if k == 27:  # Esc
+            curses.curs_set(0)
+            return None
+        elif k in (ord("\n"), curses.KEY_ENTER):
+            curses.curs_set(0)
+            try:
+                num = int(input_buf)
+                if 1 <= num <= total_msgs:
+                    return num - 1
+            except ValueError:
+                pass
+            return None
+        elif k in (curses.KEY_BACKSPACE, 127, 8):
+            input_buf = input_buf[:-1]
+        elif 0 <= k <= 255 and chr(k).isdigit():
+            input_buf += chr(k)
 
 
 def main(stdscr, chat: Chat):
@@ -445,7 +503,7 @@ def main(stdscr, chat: Chat):
 
         # Row 1: sticky header (if needed)
         if show_sticky and 0 <= cursor_msg < len(messages):
-            _draw_sticky_header(stdscr, 1, width, messages[cursor_msg])
+            _draw_sticky_header(stdscr, 1, width, messages[cursor_msg], cursor_msg + 1)
 
         # Content area
         content_start_row = header_rows
@@ -491,14 +549,13 @@ def main(stdscr, chat: Chat):
             if new_cursor != cursor_msg:
                 cursor_msg = new_cursor
                 needs_rerender = True
-        elif key == ord("g"):
-            cursor_msg = 0
-            scroll_pos = 0
-            needs_rerender = True
-        elif key == ord("G"):
-            cursor_msg = len(messages) - 1
-            needs_rerender = True
-            scroll_to_cursor = True
+        elif key in (ord("g"), ord("G")):
+            target = _goto_dialog(stdscr, height, width, len(messages))
+            needs_clear = True
+            if target is not None:
+                cursor_msg = target
+                needs_rerender = True
+                scroll_to_cursor = True
         elif key == ord("n"):
             cursor_msg = min(cursor_msg + 1, len(messages) - 1)
             needs_rerender = True
