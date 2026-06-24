@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 *.jsonl
+!tests/fixture.jsonl
+.venv/
+.pytest_cache/

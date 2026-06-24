@@ -1,0 +1,16 @@
+[project]
+name = "jsonl-chat-viewer"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.14"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pexpect",
+    "pyte",
+    "pytest",
+]
+
+[[tool.uv.index]]
+url = "https://pypi.org/simple"

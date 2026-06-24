@@ -534,6 +534,7 @@ def _find_search_matches(messages: list[Message], query: str) -> list[int]:
 def main(stdscr, chat: Chat):
     curses.curs_set(0)
     init_colors()
+    curses.set_escdelay(25)
     curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
     stdscr.timeout(-1)
     stdscr.keypad(True)
