@@ -371,6 +371,36 @@ class TestScrolling:
         assert row2_before == row2_restored
 
 
+class TestParsing:
+    """Unit tests for parsing and GPG detection (no pty needed)."""
+
+    def test_parse_chat_from_lines(self):
+        from viewer import parse_chat
+        fixture = Path(FIXTURE).read_text().splitlines()
+        chat = parse_chat(fixture)
+        assert len(chat.messages) == 5
+        assert chat.messages[0].name == "Bob"
+        assert chat.messages[1].name == "alice"
+        assert chat.messages[1].is_user is True
+        assert len(chat.messages[0].swipes) == 2
+
+    def test_gpg_detection_plaintext(self):
+        from viewer import _is_gpg_file
+        assert _is_gpg_file(FIXTURE) is False
+
+    def test_gpg_detection_binary(self, tmp_path):
+        from viewer import _is_gpg_file
+        gpg_file = tmp_path / "test.gpg"
+        gpg_file.write_bytes(b"\x85\x02" + b"\x00" * 100)
+        assert _is_gpg_file(str(gpg_file)) is True
+
+    def test_gpg_detection_armored(self, tmp_path):
+        from viewer import _is_gpg_file
+        gpg_file = tmp_path / "test.asc"
+        gpg_file.write_text("-----BEGIN PGP MESSAGE-----\nstuff\n-----END PGP MESSAGE-----\n")
+        assert _is_gpg_file(str(gpg_file)) is True
+
+
 class TestHelpOverlay:
     def test_help_shows_and_dismisses(self, screen):
         screen.send("?")

@@ -3,7 +3,9 @@
 
 import argparse
 import curses
+import getpass
 import json
+import subprocess
 import sys
 import textwrap
 from dataclasses import dataclass, field
@@ -75,66 +77,103 @@ def _format_date(ts: str) -> str:
         return ""
 
 
-def parse_chat(path: str) -> Chat:
+GPG_MAGIC = b"\x85"  # binary GPG packet tag
+GPG_ARMOR = b"-----BEGIN PGP MESSAGE-----"
+
+
+def _is_gpg_file(path: str) -> bool:
+    with open(path, "rb") as f:
+        header = f.read(64)
+    return header.startswith(GPG_MAGIC) or GPG_ARMOR in header
+
+
+def _decrypt_gpg(path: str) -> str:
+    """Decrypt a GPG file in memory, prompting for passphrase. Returns plaintext."""
+    passphrase = getpass.getpass("GPG passphrase: ")
+    result = subprocess.run(
+        ["gpg", "--decrypt", "--batch", "--yes",
+         "--passphrase-fd", "0", "--no-tty", path],
+        input=passphrase.encode(),
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.decode(errors="replace")
+        raise RuntimeError(f"GPG decryption failed: {stderr}")
+    return result.stdout.decode()
+
+
+def load_chat(path: str) -> Chat:
+    """Load a chat from a JSONL file, decrypting with GPG if needed."""
+    if _is_gpg_file(path):
+        text = _decrypt_gpg(path)
+        lines = text.splitlines()
+    else:
+        with open(path) as f:
+            lines = f.readlines()
+    return parse_chat(lines)
+
+
+def parse_chat(lines: list[str]) -> Chat:
     messages = []
     title = ""
     chat_date = ""
-    with open(path) as f:
-        for i, line in enumerate(f):
-            obj = json.loads(line)
-            if i == 0 and "chat_metadata" in obj:
-                continue
-            name = obj.get("name", "???")
-            is_user = obj.get("is_user", False)
-            is_system = obj.get("is_system", False)
-            timestamp = obj.get("send_date", "")
-            swipe_texts = obj.get("swipes", [])
-            swipe_infos = obj.get("swipe_info", [])
-            active_swipe = obj.get("swipe_id", 0) or 0
+    for i, line in enumerate(lines):
+        if not line.strip():
+            continue
+        obj = json.loads(line)
+        if i == 0 and "chat_metadata" in obj:
+            continue
+        name = obj.get("name", "???")
+        is_user = obj.get("is_user", False)
+        is_system = obj.get("is_system", False)
+        timestamp = obj.get("send_date", "")
+        swipe_texts = obj.get("swipes", [])
+        swipe_infos = obj.get("swipe_info", [])
+        active_swipe = obj.get("swipe_id", 0) or 0
 
-            if not title and obj.get("title"):
-                title = obj["title"]
-            if not chat_date and timestamp:
-                chat_date = _format_date(timestamp)
+        if not title and obj.get("title"):
+            title = obj["title"]
+        if not chat_date and timestamp:
+            chat_date = _format_date(timestamp)
 
-            main_text = obj.get("mes", "")
-            main_extra = obj.get("extra", {})
-            main_reasoning = main_extra.get("reasoning", "") or ""
-            main_model = main_extra.get("model", "") or ""
-            main_tokens = main_extra.get("token_count", 0) or 0
-            main_gen = _parse_gen_seconds(obj)
+        main_text = obj.get("mes", "")
+        main_extra = obj.get("extra", {})
+        main_reasoning = main_extra.get("reasoning", "") or ""
+        main_model = main_extra.get("model", "") or ""
+        main_tokens = main_extra.get("token_count", 0) or 0
+        main_gen = _parse_gen_seconds(obj)
 
-            if swipe_texts:
-                swipes = []
-                for j, st in enumerate(swipe_texts):
-                    reasoning = ""
-                    model = ""
-                    tokens = 0
-                    gen_secs = 0.0
-                    if j < len(swipe_infos):
-                        si = swipe_infos[j]
-                        si_extra = si.get("extra", {})
-                        reasoning = si_extra.get("reasoning", "") or ""
-                        model = si_extra.get("model", "") or ""
-                        tokens = si_extra.get("token_count", 0) or 0
-                        gen_secs = _parse_gen_seconds(si)
-                    if j == active_swipe:
-                        reasoning = reasoning or main_reasoning
-                        model = model or main_model
-                        tokens = tokens or main_tokens
-                        gen_secs = gen_secs or main_gen
-                    swipes.append(Swipe(text=st, reasoning=reasoning,
-                                        model=model, token_count=tokens,
-                                        gen_seconds=gen_secs))
-            else:
-                swipes = [Swipe(text=main_text, reasoning=main_reasoning,
-                                model=main_model, token_count=main_tokens,
-                                gen_seconds=main_gen)]
+        if swipe_texts:
+            swipes = []
+            for j, st in enumerate(swipe_texts):
+                reasoning = ""
+                model = ""
+                tokens = 0
+                gen_secs = 0.0
+                if j < len(swipe_infos):
+                    si = swipe_infos[j]
+                    si_extra = si.get("extra", {})
+                    reasoning = si_extra.get("reasoning", "") or ""
+                    model = si_extra.get("model", "") or ""
+                    tokens = si_extra.get("token_count", 0) or 0
+                    gen_secs = _parse_gen_seconds(si)
+                if j == active_swipe:
+                    reasoning = reasoning or main_reasoning
+                    model = model or main_model
+                    tokens = tokens or main_tokens
+                    gen_secs = gen_secs or main_gen
+                swipes.append(Swipe(text=st, reasoning=reasoning,
+                                    model=model, token_count=tokens,
+                                    gen_seconds=gen_secs))
+        else:
+            swipes = [Swipe(text=main_text, reasoning=main_reasoning,
+                            model=main_model, token_count=main_tokens,
+                            gen_seconds=main_gen)]
 
-            messages.append(Message(
-                name=name, is_user=is_user, is_system=is_system,
-                timestamp=timestamp, swipes=swipes, active_swipe=active_swipe,
-            ))
+        messages.append(Message(
+            name=name, is_user=is_user, is_system=is_system,
+            timestamp=timestamp, swipes=swipes, active_swipe=active_swipe,
+        ))
 
     if not title and messages:
         title = messages[0].name
@@ -845,7 +884,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     try:
-        chat = parse_chat(args.file)
+        chat = load_chat(args.file)
     except Exception as e:
         print(f"Error loading {args.file}: {e}", file=sys.stderr)
         sys.exit(1)
