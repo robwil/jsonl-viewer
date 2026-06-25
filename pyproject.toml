@@ -12,6 +12,7 @@ dev = [
     "pexpect",
     "pyte",
     "pytest",
+    "pytest-asyncio>=1.4.0",
 ]
 
 [[tool.uv.index]]
