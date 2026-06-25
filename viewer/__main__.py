@@ -1,6 +1,7 @@
 """Entry point for `python -m viewer`."""
 
 import argparse
+import os
 import sys
 
 from .parser import load_chat
@@ -20,6 +21,9 @@ def main_cli():
     if not chat.messages:
         print("No messages found.", file=sys.stderr)
         sys.exit(1)
+
+    if "COLORTERM" not in os.environ:
+        os.environ["COLORTERM"] = "truecolor"
 
     print(f"Loaded {len(chat.messages)} messages. Launching viewer...")
 
