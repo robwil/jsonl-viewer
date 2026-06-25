@@ -153,17 +153,48 @@ class MessageWidget(Static):
         super().__init__(**kwargs, id=f"msg-{idx}")
         self.msg = msg
         self.idx = idx
+        self._cached_render: Text | Group | None = None
+        self._cache_key: tuple | None = None
+
+    def _invalidate_cache(self) -> None:
+        self._cached_render = None
+        self._cache_key = None
 
     def watch_selected(self, value: bool) -> None:
         if value:
             self.add_class("selected")
         else:
             self.remove_class("selected")
+        self._invalidate_cache()
+
+    def watch_show_reasoning(self, value: bool) -> None:
+        self._invalidate_cache()
+
+    def watch_search_query(self, value: str) -> None:
+        self._invalidate_cache()
 
     def on_click(self) -> None:
         self.post_message(self.Clicked(self.idx))
 
+    def invalidate_content(self) -> None:
+        """Call after swipe changes to force re-render."""
+        self._invalidate_cache()
+        self.refresh()
+
     def render(self) -> Text | Group:
+        cache_key = (
+            self.selected, self.show_reasoning, self.search_query,
+            self.msg.active_swipe, self.size.width,
+        )
+        if self._cached_render is not None and self._cache_key == cache_key:
+            return self._cached_render
+
+        result = self._build_content()
+        self._cached_render = result
+        self._cache_key = cache_key
+        return result
+
+    def _build_content(self) -> Text | Group:
         msg = self.msg
         swipe = msg.swipes[msg.active_swipe] if msg.swipes else Swipe("", "")
         content = Text()
@@ -490,26 +521,23 @@ class ChatViewerApp(App):
             self._update_sticky_header()
             return
 
-        scroll_y = container.scroll_offset.y
-        vp_height = container.size.height
-
-        # Find visible messages
-        visible = []
-        for i in range(len(self.chat.messages)):
-            w = self.query_one(f"#msg-{i}", MessageWidget)
-            if self._is_widget_in_viewport(w, container):
-                visible.append(i)
-
-        if not visible:
-            return
-
-        # Snap to first visible if we scrolled down, last if scrolled up
-        if self.cursor_msg < visible[0]:
-            new_idx = visible[0]
-        else:
-            new_idx = visible[-1]
-
-        self._move_cursor(new_idx)
+        # Search outward from cursor to find the nearest visible message
+        n = len(self.chat.messages)
+        lo = self.cursor_msg - 1
+        hi = self.cursor_msg + 1
+        while lo >= 0 or hi < n:
+            if hi < n:
+                w = self.query_one(f"#msg-{hi}", MessageWidget)
+                if self._is_widget_in_viewport(w, container):
+                    self._move_cursor(hi)
+                    return
+                hi += 1
+            if lo >= 0:
+                w = self.query_one(f"#msg-{lo}", MessageWidget)
+                if self._is_widget_in_viewport(w, container):
+                    self._move_cursor(lo)
+                    return
+                lo -= 1
 
     def _move_cursor(self, idx: int) -> None:
         """Move the cursor marker without scrolling the viewport."""
@@ -545,7 +573,7 @@ class ChatViewerApp(App):
         if len(msg.swipes) > 1:
             msg.active_swipe = (msg.active_swipe + direction) % len(msg.swipes)
             widget = self.query_one(f"#msg-{self.cursor_msg}", MessageWidget)
-            widget.refresh()
+            widget.invalidate_content()
             self.query_one("#title-bar", TitleBar).update_cursor(self.cursor_msg)
 
     def _toggle_reasoning(self) -> None:
