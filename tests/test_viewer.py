@@ -94,6 +94,15 @@ class Screen:
         """Return row indices where text appears."""
         return [i for i in range(self.rows) if text in self.screen.display[i]]
 
+    def resize(self, rows: int, cols: int):
+        """Resize the terminal and wait for the app to redraw."""
+        self.rows = rows
+        self.cols = cols
+        self.screen = pyte.Screen(cols, rows)
+        self.stream = pyte.Stream(self.screen)
+        self.child.setwinsize(rows, cols)
+        self._read_until_idle(pause=0.3)
+
     def close(self):
         try:
             self.child.sendeof()
@@ -370,6 +379,154 @@ class TestScrolling:
         small_screen.send("k")
         row2_restored = small_screen.get_row(2)
         assert row2_before == row2_restored
+
+
+class TestCursorFollowsScroll:
+    """Cursor should snap to a visible message when the current one scrolls off."""
+
+    def test_cursor_snaps_forward_on_scroll_down(self, small_screen):
+        # Start at message 1, scroll down until it's fully off-screen
+        title = small_screen.get_row(0)
+        assert "1 / 5" in title
+
+        # Scroll down many lines — msg 1 should leave the viewport
+        for _ in range(15):
+            small_screen.send("j")
+        title = small_screen.get_row(0)
+        # Cursor should have snapped to a later message
+        assert "1 / 5" not in title
+
+    def test_cursor_snaps_back_on_scroll_up(self, small_screen):
+        # Navigate to last message
+        for _ in range(4):
+            small_screen.send("n")
+        title = small_screen.get_row(0)
+        assert "5 / 5" in title
+
+        # Scroll up many lines — msg 5 should leave the viewport
+        for _ in range(20):
+            small_screen.send("k")
+        title = small_screen.get_row(0)
+        assert "5 / 5" not in title
+
+    def test_cursor_stays_when_partially_visible(self, small_screen):
+        # Navigate to msg 3 (Bob's longer message)
+        small_screen.send("n")
+        small_screen.send("n")
+        title = small_screen.get_row(0)
+        assert "3 / 5" in title
+
+        # Scroll down just a little — msg 3 body should still be visible
+        small_screen.send("j")
+        title = small_screen.get_row(0)
+        # Should still be on msg 3
+        assert "3 / 5" in title
+
+
+class TestSearchReSearch:
+    """Test re-searching while already in search mode."""
+
+    def test_new_search_replaces_old(self, screen):
+        # First search
+        screen.send("/")
+        screen.send("tavern")
+        screen.send_key("enter")
+        help_row = screen.get_row(screen.rows - 1)
+        assert "tavern" in help_row.lower()
+
+        # Re-search with different query while in search mode
+        screen.send("/")
+        screen.send("stranger")
+        screen.send_key("enter")
+        help_row = screen.get_row(screen.rows - 1)
+        assert "stranger" in help_row.lower()
+        assert "tavern" not in help_row.lower()
+
+    def test_re_search_navigates_new_matches(self, screen):
+        # Search for something
+        screen.send("/")
+        screen.send("tavern")
+        screen.send_key("enter")
+
+        # Note position
+        title1 = screen.get_row(0)
+
+        # Re-search for "Whisper" — only in msg 5
+        screen.send("/")
+        screen.send("Whisper")
+        screen.send_key("enter")
+        title2 = screen.get_row(0)
+        assert "5 / 5" in title2
+
+        # n should wrap back to the same match (only 1 result)
+        screen.send("n")
+        title3 = screen.get_row(0)
+        assert "5 / 5" in title3
+
+    def test_cancel_re_search_keeps_old(self, screen):
+        # First search
+        screen.send("/")
+        screen.send("tavern")
+        screen.send_key("enter")
+
+        # Start new search but cancel
+        screen.send("/")
+        screen.send_key("esc", pause=0.3)
+
+        # Should still be in search mode with old query
+        help_row = screen.get_row(screen.rows - 1)
+        assert "SEARCH" in help_row
+        assert "tavern" in help_row.lower()
+
+
+class TestTerminalResize:
+    """Test that the viewer handles terminal resize correctly."""
+
+    def test_resize_wider(self):
+        s = Screen(rows=20, cols=60)
+        # Verify initial render at narrow width
+        all_text = s.get_all_text()
+        assert "Bob" in all_text
+
+        # Resize wider
+        s.resize(20, 120)
+        all_text = s.get_all_text()
+        assert "Bob" in all_text
+        # Title bar should fill the wider width
+        title = s.get_row(0)
+        assert len(title.rstrip()) > 50
+        s.close()
+
+    def test_resize_shorter(self):
+        s = Screen(rows=25, cols=90)
+        all_text = s.get_all_text()
+        assert "Bob" in all_text
+
+        # Resize to fewer rows — should still render without crashing
+        s.resize(10, 90)
+        all_text = s.get_all_text()
+        assert "Bob" in all_text
+        # Help bar should be on the last row
+        help_row = s.get_row(s.rows - 1)
+        assert "scroll" in help_row or "quit" in help_row
+        s.close()
+
+    def test_content_reflows_on_resize(self):
+        s = Screen(rows=20, cols=40)
+        # At 40 cols, long messages will wrap more
+        text_narrow = s.get_all_text()
+
+        s.resize(20, 120)
+        text_wide = s.get_all_text()
+
+        # The same content should be present but laid out differently
+        assert "Hello Alice!" in text_narrow
+        assert "Hello Alice!" in text_wide
+        # Narrow should have more lines of content due to wrapping
+        narrow_lines = [l for l in text_narrow.split("\n") if l.strip()]
+        wide_lines = [l for l in text_wide.split("\n") if l.strip()]
+        assert len(narrow_lines) >= len(wide_lines)
+        s.close()
 
 
 class TestParsing:
