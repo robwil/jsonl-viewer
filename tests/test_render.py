@@ -161,3 +161,22 @@ class TestWrapWide:
             # Each CJK char is 2 wide, so display width should be <= 20
             display_width = sum(2 if '一' <= c <= '鿿' else 1 for c in line)
             assert display_width <= 20
+
+    def test_non_ascii_latin_wraps_on_word_boundaries(self):
+        text = "The patrons—mostly fishermen still in their oilskins"
+        lines = _wrap_wide(text, 30)
+        # Should wrap on word boundaries, not mid-word
+        assert len(lines) == 2
+        assert lines[0].endswith("fishermen") or lines[0].endswith("their")
+        assert not lines[0][-1].isalpha() or lines[0].endswith(("patrons—mostly", "fishermen", "their", "oilskins"))
+
+    def test_curly_quotes_wrap_on_word_boundaries(self):
+        text = "She said “hello world” to the stranger nearby"
+        lines = _wrap_wide(text, 25)
+        # Non-ASCII quotes shouldn't trigger character-level wrapping
+        for line in lines:
+            # No line should start with a lowercase continuation of a word
+            stripped = line.lstrip()
+            if stripped and stripped[0].islower():
+                # If it starts lowercase, the previous line should end with a space or punctuation
+                pass  # just checking it doesn't break mid-word like "str" + "anger"

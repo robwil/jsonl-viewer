@@ -21,25 +21,29 @@ from .parser import _format_time
 from .state import find_search_matches
 
 
-def _char_width(ch: str) -> int:
-    """Return the display width of a character (2 for wide/fullwidth, 1 otherwise)."""
-    cat = unicodedata.east_asian_width(ch)
-    return 2 if cat in ("W", "F") else 1
+def _has_wide_chars(text: str) -> bool:
+    """Check if text contains any double-width (CJK) characters."""
+    for ch in text:
+        if unicodedata.east_asian_width(ch) in ("W", "F"):
+            return True
+    return False
 
 
 def _wrap_wide(text: str, width: int) -> list[str]:
     """Wrap text accounting for double-width CJK characters.
 
-    Falls back to textwrap.wrap for ASCII-only text (fast path).
+    Uses textwrap.wrap (word-boundary-aware) when there are no wide characters.
+    Falls back to character-level wrapping only when CJK characters are present,
+    since textwrap counts characters not display columns.
     """
-    if text.isascii():
+    if not _has_wide_chars(text):
         return textwrap.wrap(text, width) or [""]
 
     lines = []
     line: list[str] = []
     line_width = 0
     for ch in text:
-        cw = _char_width(ch)
+        cw = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
         if line_width + cw > width:
             lines.append("".join(line))
             line = []
@@ -193,9 +197,11 @@ class MessageWidget(Static):
         self._cached_render: Text | Group | None = None
         self._cache_key: tuple | None = None
 
-    def _invalidate_cache(self) -> None:
+    def _invalidate_cache(self, layout: bool = False) -> None:
         self._cached_render = None
         self._cache_key = None
+        if layout:
+            self.refresh(layout=True)
 
     def watch_selected(self, value: bool) -> None:
         if value:
@@ -205,7 +211,7 @@ class MessageWidget(Static):
         self._invalidate_cache()
 
     def watch_show_reasoning(self, value: bool) -> None:
-        self._invalidate_cache()
+        self._invalidate_cache(layout=True)
 
     def watch_search_query(self, value: str) -> None:
         self._invalidate_cache()
@@ -214,9 +220,8 @@ class MessageWidget(Static):
         self.post_message(self.Clicked(self.idx))
 
     def invalidate_content(self) -> None:
-        """Call after swipe changes to force re-render."""
-        self._invalidate_cache()
-        self.refresh()
+        """Call after swipe changes to force re-render and relayout."""
+        self._invalidate_cache(layout=True)
 
     def render(self) -> Text | Group:
         cache_key = (
