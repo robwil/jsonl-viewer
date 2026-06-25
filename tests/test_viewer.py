@@ -14,6 +14,7 @@ import pytest
 
 VIEWER = str(Path(__file__).resolve().parent.parent / "viewer.py")
 FIXTURE = str(Path(__file__).resolve().parent / "fixture.jsonl")
+ENCRYPTED_FIXTURE = str(Path(__file__).resolve().parent / "encrypted_fixture.jsonl.gpg")
 # Small terminal to force scrolling with our 5-message fixture
 ROWS, COLS = 20, 90
 
@@ -390,15 +391,53 @@ class TestParsing:
 
     def test_gpg_detection_binary(self, tmp_path):
         from viewer import _is_gpg_file
-        gpg_file = tmp_path / "test.gpg"
-        gpg_file.write_bytes(b"\x85\x02" + b"\x00" * 100)
-        assert _is_gpg_file(str(gpg_file)) is True
+        # GPG packets have bit 7 set in the first byte
+        for tag in [0x85, 0x8C, 0xC0, 0xFF]:
+            gpg_file = tmp_path / f"test_{tag:x}.gpg"
+            gpg_file.write_bytes(bytes([tag]) + b"\x00" * 100)
+            assert _is_gpg_file(str(gpg_file)) is True
 
     def test_gpg_detection_armored(self, tmp_path):
         from viewer import _is_gpg_file
         gpg_file = tmp_path / "test.asc"
         gpg_file.write_text("-----BEGIN PGP MESSAGE-----\nstuff\n-----END PGP MESSAGE-----\n")
         assert _is_gpg_file(str(gpg_file)) is True
+
+
+class TestGPGDecryption:
+    """Test loading a GPG-encrypted JSONL file via the pty."""
+
+    def test_gpg_encrypted_file(self):
+        screen = pyte.Screen(COLS, ROWS)
+        stream = pyte.Stream(screen)
+        child = pexpect.spawn(
+            f"python3 {VIEWER} {ENCRYPTED_FIXTURE}",
+            dimensions=(ROWS, COLS),
+            encoding="utf-8",
+            timeout=5,
+        )
+        # Wait for passphrase prompt
+        child.expect("GPG passphrase:", timeout=5)
+        child.sendline("test")
+
+        # Read until idle — TUI should render
+        while True:
+            try:
+                data = child.read_nonblocking(size=4096, timeout=0.3)
+                stream.feed(data)
+            except (pexpect.TIMEOUT, pexpect.EOF):
+                break
+
+        all_text = "\n".join(line.rstrip() for line in screen.display)
+        # Should show the same content as the plaintext fixture
+        assert "Bob" in all_text
+        assert "#1" in all_text
+
+        try:
+            child.sendeof()
+        except OSError:
+            pass
+        child.close(force=True)
 
 
 class TestHelpOverlay:

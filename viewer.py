@@ -5,6 +5,7 @@ import argparse
 import curses
 import getpass
 import json
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -77,18 +78,24 @@ def _format_date(ts: str) -> str:
         return ""
 
 
-GPG_MAGIC = b"\x85"  # binary GPG packet tag
 GPG_ARMOR = b"-----BEGIN PGP MESSAGE-----"
 
 
 def _is_gpg_file(path: str) -> bool:
     with open(path, "rb") as f:
         header = f.read(64)
-    return header.startswith(GPG_MAGIC) or GPG_ARMOR in header
+    if not header:
+        return False
+    # GPG binary packets always have bit 7 set in the first byte
+    if header[0] & 0x80:
+        return True
+    return GPG_ARMOR in header
 
 
 def _decrypt_gpg(path: str) -> str:
     """Decrypt a GPG file in memory, prompting for passphrase. Returns plaintext."""
+    if not shutil.which("gpg"):
+        raise RuntimeError("GPG encrypted file detected but 'gpg' is not installed or not in PATH")
     passphrase = getpass.getpass("GPG passphrase: ")
     result = subprocess.run(
         ["gpg", "--decrypt", "--batch", "--yes",
