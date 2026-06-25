@@ -905,4 +905,9 @@ if __name__ == "__main__":
         os.environ["TERM"] = "xterm-256color"
 
     print(f"Loaded {len(chat.messages)} messages. Launching viewer...")
-    curses.wrapper(lambda stdscr: main(stdscr, chat))
+    try:
+        curses.wrapper(lambda stdscr: main(stdscr, chat))
+    except curses.error:
+        # Fallback if terminfo for the current TERM isn't available
+        os.environ["TERM"] = "xterm"
+        curses.wrapper(lambda stdscr: main(stdscr, chat))
