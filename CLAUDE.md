@@ -2,7 +2,7 @@
 
 ## What is this
 
-A Python curses TUI for reading SillyTavern JSONL chat exports. No runtime dependencies beyond the stdlib. Dev dependencies managed with `uv`.
+A Python TUI for reading SillyTavern JSONL chat exports, built with [Textual](https://textual.textualize.io/). Dev dependencies managed with `uv`.
 
 ## Project structure
 
@@ -13,41 +13,41 @@ viewer/
   __main__.py          — argparse + CLI entry point
   models.py            — data model: Swipe, Message, Chat, RenderedLine
   parser.py            — JSONL parsing, GPG decryption, load_chat
-  render.py            — pre-render messages into flat RenderedLine lists
-  colors.py            — curses color pair constants + init_colors
-  draw.py              — curses drawing: title bar, sticky header, content lines, search highlights
-  dialogs.py           — modal dialogs: goto, search, help overlay
+  render.py            — pre-render messages into flat RenderedLine lists (legacy, used by state.py)
+  colors.py            — color pair constants (style identifiers used by render.py)
   state.py             — ViewerState dataclass + scroll/search helper functions
-  app.py               — main loop, layout calculation, key dispatch
+  app.py               — Textual App: widgets, modal screens, key dispatch
 tests/
-  test_viewer.py       — integration tests using pyte + pexpect (PTY-based, ~60s)
+  test_viewer.py       — integration tests (PTY-based, need updating for Textual)
   test_state.py        — unit tests for ViewerState and scroll/search helpers
   test_render.py       — unit tests for rendering functions
   fixture.jsonl        — 5-message test fixture with swipes, reasoning, and metadata
 ```
 
-Curses is isolated to `draw.py`, `dialogs.py`, `colors.py`, and `app.py`. The other modules (`models.py`, `parser.py`, `render.py`, `state.py`) are framework-agnostic.
+Framework-agnostic modules: `models.py`, `parser.py`, `render.py`, `state.py`, `colors.py`. Textual-specific: `app.py`.
 
 ## Running the app
 
 ```
-python3 viewer.py path/to/chat.jsonl
-python3 -m viewer path/to/chat.jsonl
+uv sync
+uv run python viewer.py path/to/chat.jsonl
+uv run python -m viewer path/to/chat.jsonl
 ```
 
 ## Running tests
 
 ```
 uv sync
-uv run pytest
+uv run pytest tests/test_state.py tests/test_render.py
 ```
 
-PTY integration tests spawn the viewer in a real pty at a fixed terminal size, send keystrokes, and assert on the pyte-emulated screen buffer (~60s). Unit tests for state and render run in ~0.03s.
+Unit tests for state and render run in ~0.03s. The PTY integration tests (`test_viewer.py`) were written for the curses UI and need to be rewritten for Textual.
 
 ## Key architecture decisions
 
-- Messages are pre-rendered into a flat list of `RenderedLine` objects, each tagged with `msg_idx`. The main loop only draws the visible viewport slice.
-- `ViewerState` holds all mutable state (cursor, scroll, search, expanded reasoning) with action methods that manage the `needs_rerender`/`scroll_to_cursor` flags.
-- The cursor marker (`▌`) is baked into the rendered lines, so changing `cursor_msg` requires a full re-render.
-- `curses.set_escdelay(25)` is set so Esc is responsive and doesn't conflict with arrow key escape sequences.
-- Search mode is a separate key handler that shares scroll logic with normal mode via `_handle_scroll_key`.
+- Each message is a `MessageWidget` (Textual `Static`) inside a `VerticalScroll` container. Textual handles scrolling and viewport management.
+- Messages render themselves as Rich `Text` objects with styled spans. Search highlighting uses Rich's `highlight_words`.
+- Modal screens (`SearchScreen`, `GotoScreen`, `HelpScreen`) use Textual's `ModalScreen` with `Input` widgets.
+- All key handling goes through `on_key()` with separate dispatch for normal mode and search mode, sharing scroll logic via `_handle_scroll_key`.
+- The `▌` cursor marker is rendered in the message content text, matching the original curses UX.
+- `render.py` and `state.py` are preserved from the curses era — `find_search_matches` from state.py is used by the Textual app.
