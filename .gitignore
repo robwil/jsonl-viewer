@@ -3,5 +3,6 @@ __pycache__/
 *.jsonl
 !tests/fixture.jsonl
 !tests/encrypted_fixture.jsonl.gpg
+.python-version
 .venv/
 .pytest_cache/
