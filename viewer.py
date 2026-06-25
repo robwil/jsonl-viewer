@@ -900,5 +900,9 @@ if __name__ == "__main__":
         print("No messages found.", file=sys.stderr)
         sys.exit(1)
 
+    import os
+    if "TERM" not in os.environ:
+        os.environ["TERM"] = "xterm-256color"
+
     print(f"Loaded {len(chat.messages)} messages. Launching viewer...")
     curses.wrapper(lambda stdscr: main(stdscr, chat))
