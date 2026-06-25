@@ -130,6 +130,10 @@ class StickyHeader(Static):
         self._selected = selected
         self.refresh()
 
+    def clear(self) -> None:
+        self._msg = None
+        self.refresh()
+
     def render(self) -> Text:
         if self._msg is None:
             return Text("")
@@ -389,10 +393,9 @@ class ChatViewerApp(App):
     CSS = """
     Screen { background: $surface; }
     #title-bar { dock: top; width: 100%; height: 1; }
-    #sticky-header { width: 100%; height: 0; }
-    #sticky-header.visible { height: 1; }
+    #sticky-header { width: 100%; height: 1; }
     #status-bar { dock: bottom; width: 100%; height: 1; }
-    #messages { width: 100%; }
+    #messages { width: 100%; overflow-y: scroll; }
     """
 
     def __init__(self, chat: Chat, **kwargs) -> None:
@@ -548,7 +551,7 @@ class ChatViewerApp(App):
                 break
 
         if top_msg is None:
-            sticky.remove_class("visible")
+            sticky.clear()
             return
 
         widget = self.query_one(f"#msg-{top_msg}", MessageWidget)
@@ -561,9 +564,8 @@ class ChatViewerApp(App):
                 self.chat.messages[top_msg], top_msg,
                 selected=(top_msg == self.cursor_msg),
             )
-            sticky.add_class("visible")
         else:
-            sticky.remove_class("visible")
+            sticky.clear()
 
     def _snap_cursor_to_viewport(self) -> None:
         """If the selected message is off-screen, snap cursor to the nearest visible one."""
@@ -619,7 +621,7 @@ class ChatViewerApp(App):
         widget.selected = True
         widget.scroll_visible(animate=False)
         self.query_one("#title-bar", TitleBar).update_cursor(idx)
-        self._update_sticky_header()
+        self.set_timer(0.05, self._update_sticky_header)
 
     def _toggle_swipe(self, direction: int) -> None:
         msg = self.chat.messages[self.cursor_msg]

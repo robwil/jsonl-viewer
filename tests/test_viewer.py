@@ -361,59 +361,61 @@ class TestSearch:
             assert "SEARCH" not in status
 
 
+def _sticky_showing(app: ChatViewerApp) -> bool:
+    """Check if the sticky header is displaying content."""
+    sticky = app.query_one("#sticky-header", StickyHeader)
+    return sticky._msg is not None
+
+
 class TestStickyHeader:
     @pytest.mark.asyncio
     async def test_hidden_when_header_visible(self, chat):
         app = ChatViewerApp(chat)
         async with app.run_test(size=(80, 14)) as pilot:
-            sticky = app.query_one("#sticky-header", StickyHeader)
-            assert not sticky.has_class("visible")
+            assert not _sticky_showing(app)
 
     @pytest.mark.asyncio
     async def test_shows_when_scrolled_past_header(self, chat):
         app = ChatViewerApp(chat)
         async with app.run_test(size=(80, 14)) as pilot:
-            sticky = app.query_one("#sticky-header", StickyHeader)
             # Navigate to msg 3 (Bob's longer message) and scroll into it
             await pilot.press("n", "n")
             for _ in range(8):
                 await pilot.press("j")
             await pilot.pause()
-            assert sticky.has_class("visible")
-            rendered = sticky.render()
-            assert "#3" in rendered.plain
+            assert _sticky_showing(app)
+            sticky = app.query_one("#sticky-header", StickyHeader)
+            assert "#3" in sticky.render().plain
 
     @pytest.mark.asyncio
     async def test_shows_for_any_message_at_viewport_top(self, chat):
         """Sticky header tracks the viewport top message, not the cursor."""
         app = ChatViewerApp(chat)
         async with app.run_test(size=(80, 14)) as pilot:
-            sticky = app.query_one("#sticky-header", StickyHeader)
             # Scroll down without moving cursor — sticky should show
             # the message at the viewport top, regardless of cursor position
             for _ in range(8):
                 await pilot.press("j")
             await pilot.pause()
-            if sticky.has_class("visible"):
-                rendered = sticky.render()
-                assert "#" in rendered.plain
+            if _sticky_showing(app):
+                sticky = app.query_one("#sticky-header", StickyHeader)
+                assert "#" in sticky.render().plain
 
     @pytest.mark.asyncio
     async def test_hides_when_header_scrolled_back_into_view(self, chat):
         app = ChatViewerApp(chat)
         async with app.run_test(size=(80, 14)) as pilot:
-            sticky = app.query_one("#sticky-header", StickyHeader)
             await pilot.press("n", "n")
             for _ in range(8):
                 await pilot.press("j")
             await pilot.pause()
-            assert sticky.has_class("visible")
+            assert _sticky_showing(app)
 
             # Scroll back up until the header comes into view
             for _ in range(8):
                 await pilot.press("k")
             await pilot.pause()
-            assert not sticky.has_class("visible")
+            assert not _sticky_showing(app)
 
 
 class TestScrolling:
