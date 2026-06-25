@@ -15,11 +15,18 @@ These chat files can get novel-length, so the viewer is designed around efficien
 - Case-insensitive text search with red highlights
 - Goto-by-ID dialog for jumping to specific messages
 - Mouse click to select messages, mouse scroll support
+- Transparent GPG decryption (opens `.jsonl.gpg` or ASCII-armored files, prompts for passphrase)
 
 ## Usage
 
 ```
 python3 viewer.py path/to/chat.jsonl
+```
+
+GPG-encrypted files are detected automatically (binary or ASCII-armored). Requires `gpg` on PATH:
+
+```
+python3 viewer.py path/to/chat.jsonl.gpg
 ```
 
 No install needed. Requires Python 3.10+.
