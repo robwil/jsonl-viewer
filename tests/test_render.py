@@ -1,5 +1,6 @@
 """Unit tests for rendering functions."""
 
+from viewer.app import _wrap_wide
 from viewer.models import Message, RenderedLine, Swipe
 from viewer.render import _build_header_text, _name_color, render_messages
 from viewer.colors import CP_CHAR_NAME, CP_REASONING, CP_SEPARATOR, CP_USER_NAME
@@ -114,3 +115,49 @@ class TestRenderMessages:
         lines = render_messages(msgs, 80, set())
         for rl in lines:
             assert rl.msg_idx in (0, 1)
+
+
+class TestWrapWide:
+    def test_ascii_text(self):
+        lines = _wrap_wide("hello world foo bar", 10)
+        assert all(len(l) <= 10 for l in lines)
+        assert "hello" in lines[0]
+
+    def test_empty_string(self):
+        assert _wrap_wide("", 20) == [""]
+
+    def test_cjk_characters_double_width(self):
+        # 5 CJK chars = 10 display columns; should fit in width=10
+        text = "你好世界啊"
+        lines = _wrap_wide(text, 10)
+        assert len(lines) == 1
+        assert lines[0] == text
+
+    def test_cjk_wrap_at_boundary(self):
+        # 6 CJK chars = 12 display columns; width=10 should split
+        text = "你好世界啊吗"
+        lines = _wrap_wide(text, 10)
+        assert len(lines) == 2
+        # First line: 5 chars = 10 columns
+        assert lines[0] == "你好世界啊"
+        assert lines[1] == "吗"
+
+    def test_mixed_ascii_cjk(self):
+        # "Hi" = 2 cols, "你好" = 4 cols, total = 6
+        text = "Hi你好"
+        lines = _wrap_wide(text, 6)
+        assert len(lines) == 1
+
+        # Width 5: "Hi你" = 4 cols fits, "好" = 2 cols doesn't
+        lines = _wrap_wide(text, 5)
+        assert len(lines) == 2
+        assert lines[0] == "Hi你"
+        assert lines[1] == "好"
+
+    def test_long_cjk_paragraph(self):
+        text = "这是一段很长的中文文本需要被换行处理"
+        lines = _wrap_wide(text, 20)
+        for line in lines:
+            # Each CJK char is 2 wide, so display width should be <= 20
+            display_width = sum(2 if '一' <= c <= '鿿' else 1 for c in line)
+            assert display_width <= 20

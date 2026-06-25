@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import textwrap
+import unicodedata
 
 from textual.app import App, ComposeResult
 from textual.containers import Vertical, VerticalScroll
@@ -18,6 +19,36 @@ from rich.text import Text
 from .models import Chat, Message, Swipe
 from .parser import _format_time
 from .state import find_search_matches
+
+
+def _char_width(ch: str) -> int:
+    """Return the display width of a character (2 for wide/fullwidth, 1 otherwise)."""
+    cat = unicodedata.east_asian_width(ch)
+    return 2 if cat in ("W", "F") else 1
+
+
+def _wrap_wide(text: str, width: int) -> list[str]:
+    """Wrap text accounting for double-width CJK characters.
+
+    Falls back to textwrap.wrap for ASCII-only text (fast path).
+    """
+    if text.isascii():
+        return textwrap.wrap(text, width) or [""]
+
+    lines = []
+    line: list[str] = []
+    line_width = 0
+    for ch in text:
+        cw = _char_width(ch)
+        if line_width + cw > width:
+            lines.append("".join(line))
+            line = []
+            line_width = 0
+        line.append(ch)
+        line_width += cw
+    if line:
+        lines.append("".join(line))
+    return lines or [""]
 
 
 HELP_TEXT = """\
@@ -84,16 +115,19 @@ class TitleBar(Static):
 
 
 class StickyHeader(Static):
-    """Shows the current message header when its real header scrolls off-screen."""
+    """Shows the header of the message at the top of the viewport when its
+    real header has scrolled off-screen."""
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._msg: Message | None = None
         self._idx = 0
+        self._selected = False
 
-    def set_message(self, msg: Message, idx: int) -> None:
+    def set_message(self, msg: Message, idx: int, selected: bool) -> None:
         self._msg = msg
         self._idx = idx
+        self._selected = selected
         self.refresh()
 
     def render(self) -> Text:
@@ -103,7 +137,8 @@ class StickyHeader(Static):
         swipe = msg.swipes[msg.active_swipe] if msg.swipes else Swipe("", "")
         style = "bold green" if msg.is_user else ("bold yellow" if msg.is_system else "bold cyan")
 
-        parts = [f"▌ #{self._idx + 1} {msg.name}"]
+        prefix = "▌ " if self._selected else "  "
+        parts = [f"{prefix}#{self._idx + 1} {msg.name}"]
         if len(msg.swipes) > 1:
             parts.append(f"[{msg.active_swipe + 1}/{len(msg.swipes)}]")
         time_str = _format_time(msg.timestamp)
@@ -117,10 +152,8 @@ class StickyHeader(Static):
         if swipe.gen_seconds > 0:
             parts.append(f"{swipe.gen_seconds:.1f}s")
 
-        width = max(self.size.width, 20)
-        header = "  ".join(parts)
-        result = Text(header.ljust(width)[:width], style=f"{style} reverse")
-        result.stylize("bold yellow", 0, 1)
+        result = Text()
+        result.append("  ".join(parts), style=style)
         return result
 
 
@@ -237,7 +270,7 @@ class MessageWidget(Static):
                 if not para.strip():
                     content.append(f"\n{prefix}", style="magenta")
                     continue
-                for wl in textwrap.wrap(para, reasoning_wrap):
+                for wl in _wrap_wide(para, reasoning_wrap):
                     content.append(f"\n{reasoning_prefix}{wl}", style="magenta")
 
         # Body — wrap each paragraph so every line gets the gutter prefix
@@ -245,7 +278,7 @@ class MessageWidget(Static):
             if not para.strip():
                 content.append(f"\n{prefix}")
                 continue
-            for wl in textwrap.wrap(para, wrap_width):
+            for wl in _wrap_wide(para, wrap_width):
                 content.append(f"\n{prefix}{wl}")
 
         # Search highlights
@@ -499,18 +532,35 @@ class ChatViewerApp(App):
         return wy + wh > scroll_y and wy < scroll_y + vp_height
 
     def _update_sticky_header(self) -> None:
-        """Show/hide the sticky header based on whether the current message's header is off-screen."""
+        """Show the header of whichever message is at the top of the viewport,
+        if that message's real header has scrolled off-screen."""
         container = self.query_one("#messages", VerticalScroll)
         sticky = self.query_one("#sticky-header", StickyHeader)
-        widget = self.query_one(f"#msg-{self.cursor_msg}", MessageWidget)
-
         scroll_y = container.scroll_offset.y
+
+        # Find the message whose body occupies the top of the viewport
+        top_msg = None
+        for i in range(len(self.chat.messages)):
+            w = self.query_one(f"#msg-{i}", MessageWidget)
+            vr = w.virtual_region
+            if vr.y + vr.height > scroll_y:
+                top_msg = i
+                break
+
+        if top_msg is None:
+            sticky.remove_class("visible")
+            return
+
+        widget = self.query_one(f"#msg-{top_msg}", MessageWidget)
         header_y = widget.virtual_region.y
         # The separator Rule above non-first messages takes 1 row before the header
-        header_y_effective = header_y + (1 if self.cursor_msg > 0 else 0)
+        header_y += 1 if top_msg > 0 else 0
 
-        if header_y_effective < scroll_y:
-            sticky.set_message(self.chat.messages[self.cursor_msg], self.cursor_msg)
+        if header_y < scroll_y:
+            sticky.set_message(
+                self.chat.messages[top_msg], top_msg,
+                selected=(top_msg == self.cursor_msg),
+            )
             sticky.add_class("visible")
         else:
             sticky.remove_class("visible")
