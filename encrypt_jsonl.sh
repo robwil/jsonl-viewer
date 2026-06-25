@@ -13,10 +13,21 @@ fi
 
 echo "Found ${#files[@]} .jsonl files to encrypt."
 
-# Encrypt each file with symmetric encryption (will prompt for passphrase per file)
+# Prompt once for passphrase (not echoed to terminal)
+read -rsp "Passphrase: " passphrase
+echo
+read -rsp "Confirm passphrase: " passphrase_confirm
+echo
+
+if [ "$passphrase" != "$passphrase_confirm" ]; then
+  echo "ERROR: Passphrases do not match."
+  exit 1
+fi
+
+# Encrypt each file with symmetric encryption using the single passphrase
 for f in "${files[@]}"; do
   echo "Encrypting: $f"
-  gpg --symmetric --cipher-algo AES256 "$f"
+  gpg --symmetric --cipher-algo AES256 --batch --yes --passphrase-fd 3 "$f" 3<<< "$passphrase"
 done
 
 echo "Encryption step finished. Verifying output files..."
