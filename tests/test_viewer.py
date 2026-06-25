@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from viewer.app import ChatViewerApp, MessageWidget, StatusBar, TitleBar
+from viewer.app import ChatViewerApp, MessageWidget, StatusBar, StickyHeader, TitleBar
 from viewer.parser import load_chat, parse_chat, _is_gpg_file
 
 FIXTURE = str(Path(__file__).resolve().parent / "fixture.jsonl")
@@ -359,6 +359,44 @@ class TestSearch:
             assert app.search_mode is False
             status = _status_text(app)
             assert "SEARCH" not in status
+
+
+class TestStickyHeader:
+    @pytest.mark.asyncio
+    async def test_hidden_when_header_visible(self, chat):
+        app = ChatViewerApp(chat)
+        async with app.run_test(size=(80, 14)) as pilot:
+            sticky = app.query_one("#sticky-header", StickyHeader)
+            assert not sticky.has_class("visible")
+
+    @pytest.mark.asyncio
+    async def test_shows_when_scrolled_past_header(self, chat):
+        app = ChatViewerApp(chat)
+        async with app.run_test(size=(80, 14)) as pilot:
+            sticky = app.query_one("#sticky-header", StickyHeader)
+            # Navigate to msg 3 (Bob's longer message) and scroll into it
+            await pilot.press("n", "n")
+            for _ in range(8):
+                await pilot.press("j")
+            await pilot.pause()
+            assert sticky.has_class("visible")
+            rendered = sticky.render()
+            assert "#3" in rendered.plain
+
+    @pytest.mark.asyncio
+    async def test_hides_when_navigating_to_next(self, chat):
+        app = ChatViewerApp(chat)
+        async with app.run_test(size=(80, 14)) as pilot:
+            sticky = app.query_one("#sticky-header", StickyHeader)
+            await pilot.press("n", "n")
+            for _ in range(8):
+                await pilot.press("j")
+            await pilot.pause()
+            assert sticky.has_class("visible")
+
+            await pilot.press("n")
+            await pilot.pause()
+            assert not sticky.has_class("visible")
 
 
 class TestScrolling:

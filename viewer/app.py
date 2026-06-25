@@ -83,6 +83,47 @@ class TitleBar(Static):
         return result
 
 
+class StickyHeader(Static):
+    """Shows the current message header when its real header scrolls off-screen."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._msg: Message | None = None
+        self._idx = 0
+
+    def set_message(self, msg: Message, idx: int) -> None:
+        self._msg = msg
+        self._idx = idx
+        self.refresh()
+
+    def render(self) -> Text:
+        if self._msg is None:
+            return Text("")
+        msg = self._msg
+        swipe = msg.swipes[msg.active_swipe] if msg.swipes else Swipe("", "")
+        style = "bold green" if msg.is_user else ("bold yellow" if msg.is_system else "bold cyan")
+
+        parts = [f"▌ #{self._idx + 1} {msg.name}"]
+        if len(msg.swipes) > 1:
+            parts.append(f"[{msg.active_swipe + 1}/{len(msg.swipes)}]")
+        time_str = _format_time(msg.timestamp)
+        if time_str:
+            parts.append(time_str)
+        if swipe.model:
+            short = swipe.model.split("/")[-1] if "/" in swipe.model else swipe.model
+            parts.append(short)
+        if swipe.token_count:
+            parts.append(f"{swipe.token_count}tok")
+        if swipe.gen_seconds > 0:
+            parts.append(f"{swipe.gen_seconds:.1f}s")
+
+        width = max(self.size.width, 20)
+        header = "  ".join(parts)
+        result = Text(header.ljust(width)[:width], style=f"{style} reverse")
+        result.stylize("bold yellow", 0, 1)
+        return result
+
+
 class StatusBar(Static):
     """Bottom bar showing keybinding hints or search info."""
 
@@ -284,6 +325,8 @@ class ChatViewerApp(App):
     CSS = """
     Screen { background: $surface; }
     #title-bar { dock: top; width: 100%; height: 1; }
+    #sticky-header { width: 100%; height: 0; }
+    #sticky-header.visible { height: 1; }
     #status-bar { dock: bottom; width: 100%; height: 1; }
     #messages { width: 100%; }
     """
@@ -300,6 +343,7 @@ class ChatViewerApp(App):
 
     def compose(self) -> ComposeResult:
         yield TitleBar(self.chat, id="title-bar")
+        yield StickyHeader(id="sticky-header")
         yield VerticalScroll(id="messages")
         yield StatusBar(id="status-bar")
 
@@ -422,12 +466,28 @@ class ChatViewerApp(App):
         wh = widget.virtual_region.height
         return wy + wh > scroll_y and wy < scroll_y + vp_height
 
+    def _update_sticky_header(self) -> None:
+        """Show/hide the sticky header based on whether the current message's header is off-screen."""
+        container = self.query_one("#messages", VerticalScroll)
+        sticky = self.query_one("#sticky-header", StickyHeader)
+        widget = self.query_one(f"#msg-{self.cursor_msg}", MessageWidget)
+
+        scroll_y = container.scroll_offset.y
+        header_y = widget.virtual_region.y
+
+        if header_y < scroll_y:
+            sticky.set_message(self.chat.messages[self.cursor_msg], self.cursor_msg)
+            sticky.add_class("visible")
+        else:
+            sticky.remove_class("visible")
+
     def _snap_cursor_to_viewport(self) -> None:
         """If the selected message is off-screen, snap cursor to the nearest visible one."""
         container = self.query_one("#messages", VerticalScroll)
 
         current = self.query_one(f"#msg-{self.cursor_msg}", MessageWidget)
         if self._is_widget_in_viewport(current, container):
+            self._update_sticky_header()
             return
 
         scroll_y = container.scroll_offset.y
@@ -461,6 +521,7 @@ class ChatViewerApp(App):
         new_widget = self.query_one(f"#msg-{idx}", MessageWidget)
         new_widget.selected = True
         self.query_one("#title-bar", TitleBar).update_cursor(idx)
+        self._update_sticky_header()
 
     def _select_message(self, idx: int) -> None:
         old = self.cursor_msg
@@ -477,6 +538,7 @@ class ChatViewerApp(App):
         widget.selected = True
         widget.scroll_visible(animate=False)
         self.query_one("#title-bar", TitleBar).update_cursor(idx)
+        self._update_sticky_header()
 
     def _toggle_swipe(self, direction: int) -> None:
         msg = self.chat.messages[self.cursor_msg]

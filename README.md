@@ -1,6 +1,6 @@
 # JSONL Chat Viewer
 
-A Python TUI for reading SillyTavern JSONL chat exports. Built with curses, no runtime dependencies beyond the Python standard library.
+A Python TUI for reading SillyTavern JSONL chat exports. Built with [Textual](https://textual.textualize.io/).
 
 These chat files can get novel-length, so the viewer is designed around efficient scrolling and quick navigation.
 
@@ -20,16 +20,17 @@ These chat files can get novel-length, so the viewer is designed around efficien
 ## Usage
 
 ```
-python3 viewer.py path/to/chat.jsonl
+uv sync
+uv run python viewer.py path/to/chat.jsonl
 ```
 
 GPG-encrypted files are detected automatically (binary or ASCII-armored). Requires `gpg` on PATH:
 
 ```
-python3 viewer.py path/to/chat.jsonl.gpg
+uv run python viewer.py path/to/chat.jsonl.gpg
 ```
 
-No install needed. Requires Python 3.10+.
+Requires Python 3.10+.
 
 ## Keybindings
 
@@ -53,4 +54,4 @@ uv sync
 uv run pytest
 ```
 
-Tests use `pyte` and `pexpect` to spawn the viewer in a real pty, send keystrokes, and assert on screen contents.
+Tests use Textual's async pilot framework to drive the app and assert on widget state.
