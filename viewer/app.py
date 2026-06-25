@@ -417,6 +417,7 @@ class ChatViewerApp(App):
         else:
             return False
 
+        self._update_sticky_header()
         self.set_timer(0.05, self._snap_cursor_to_viewport)
         return True
 
@@ -505,8 +506,10 @@ class ChatViewerApp(App):
 
         scroll_y = container.scroll_offset.y
         header_y = widget.virtual_region.y
+        # The separator Rule above non-first messages takes 1 row before the header
+        header_y_effective = header_y + (1 if self.cursor_msg > 0 else 0)
 
-        if header_y < scroll_y:
+        if header_y_effective < scroll_y:
             sticky.set_message(self.chat.messages[self.cursor_msg], self.cursor_msg)
             sticky.add_class("visible")
         else:
