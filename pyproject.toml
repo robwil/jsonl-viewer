@@ -9,8 +9,6 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "pexpect",
-    "pyte",
     "pytest",
     "pytest-asyncio>=1.4.0",
 ]
